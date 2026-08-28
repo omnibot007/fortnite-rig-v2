@@ -1,0 +1,29 @@
+; Fortnite Rig v2 -- Engine.ini overlay for ThinkPad P15 Gen1 i7-10750H + Quadro T1000 4GB + 60Hz
+; Applied atomically by scripts\apply.ps1 -- NOT appended. Fortnite rewrites Engine.ini to ~70KB default; re-asserted by hash.
+; Tier1 SAFE included, Tier2 CONDITIONAL commented -- uncomment only after bench proves gain.
+
+[SystemSettings]
+; --- Tier1 SAFE (input + VRAM) ---
+r.OneFrameThreadLag=0
+r.GTSyncType=1
+r.FinishCurrentFrame=0
+rhi.SyncInterval=0
+r.VSync=0
+t.MaxFPS=0
+r.Streaming.PoolSize=768
+r.Streaming.LimitPoolSizeToVRAM=1
+r.Streaming.UseFixedPoolSize=1
+r.Nanite.ProjectEnabled=0
+r.AllowOcclusionQueries=1
+
+; --- Tier2 CONDITIONAL (uncomment after bench) ---
+; r.HZBOcclusion=1
+; r.DownsampledOcclusionQueries=1
+; r.VRS.Enable=1
+; r.VRS.ContrastAdaptiveShading=1
+; r.Streaming.UseAllMips=0
+; r.FullyLoadUsedTextures=1
+; r.SkeletalMeshLODBias=0
+
+; --- Never set (rejected) ---
+; r.TdrLevel -- not an Engine.ini CVar, use registry TdrLevel 3 if needed

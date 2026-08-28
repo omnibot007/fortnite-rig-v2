@@ -1,0 +1,4 @@
+[Fortnite]
+AdditionalCommandLine=-limitclientticks -USEALLAVAILABLECORES -PREFERREDPROCESSOR 0 -NOSPLASH
+; Verified Game.ini path: %LOCALAPPDATA%\EpicGamesLauncher\Saved\Config\Windows\Game.ini
+; EGL may overwrite on update — persist.ps1 re-asserts by hash.

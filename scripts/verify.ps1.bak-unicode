@@ -1,0 +1,105 @@
+# Fortnite Rig v2 — verify.ps1
+# Reads live state, no writes. Like fortnite-lab\baseline.json guard + fortnite-latency-tweaks\verify.ps1
+
+$root="C:\Users\LENOVO\fortnite-rig-v2"
+$ts=Get-Date -Format "yyyyMMdd-HHmmss"
+Write-Host "=== Fortnite Rig v2 Verify $ts ===" -ForegroundColor Cyan
+
+function OK($m){ Write-Host "  [OK] $m" -ForegroundColor Green }
+function DIFF($m){ Write-Host "  [DIFF] $m" -ForegroundColor Yellow }
+function MISS($m){ Write-Host "  [MISS] $m" -ForegroundColor Red }
+
+# Engine.ini
+$e="$env:LOCALAPPDATA\FortniteGame\Saved\Config\WindowsClient\Engine.ini"
+Write-Host "`n--- Engine.ini $e ---" -ForegroundColor Yellow
+if(Test-Path $e){
+  $c=Get-Content $e -Raw
+  foreach($k in @("r.OneFrameThreadLag=0","r.GTSyncType=1","r.Streaming.PoolSize=768","t.MaxFPS=0")){
+    if($c -match [regex]::Escape($k)){ OK $k } else { DIFF "missing $k" }
+  }
+  if($c -match "r.HZBOcclusion=1"){ OK "r.HZBOcclusion=1 (Conditional)" } else { Write-Host "  [..] r.HZBOcclusion absent (Conditional, ok if not benched)" -ForegroundColor DarkGray }
+  Write-Host "  hash $((Get-FileHash $e -Algorithm SHA256).Hash.Substring(0,12)) bytes $((Get-Item $e).Length)"
+} else { MISS "Engine.ini not found" }
+
+# GameUserSettings.ini — cloud authoritative warn
+$g="$env:LOCALAPPDATA\FortniteGame\Saved\Config\WindowsClient\GameUserSettings.ini"
+Write-Host "`n--- GameUserSettings.ini (cloud authoritative — in-game menu is truth) ---" -ForegroundColor Yellow
+if(Test-Path $g){
+  foreach($kv in @(@{k="bDisableMouseAcceleration";want="True"},@{k="bUseVSync";want="False"},@{k="PreferredFullscreenMode";want="0"},@{k="FrameRateLimit";want="360.000000"},@{k="sg.ResolutionQuality";want="65"},@{k="LowInputLatencyModeIsEnabled";want="True"})){
+    $m=Select-String -Path $g -Pattern ("^"+[regex]::Escape($kv.k)+"=") | Select -First 1
+    if($m){ $v=$m.Line.Split("=")[1]; if($v -eq $kv.want){ OK "$($kv.k)=$v" } else { DIFF "$($kv.k)=$v (want $($kv.want)) — fix IN-GAME, cloud sync" } } else { MISS "$($kv.k) absent" }
+  }
+} else { MISS "GameUserSettings.ini not found" }
+
+# Game.ini
+$gi="$env:LOCALAPPDATA\EpicGamesLauncher\Saved\Config\Windows\Game.ini"
+Write-Host "`n--- Game.ini ---" -ForegroundColor Yellow
+if(Test-Path $gi){ $c=Get-Content $gi -Raw; if($c -match "AdditionalCommandLine"){ OK ((Select-String -Path $gi -Pattern AdditionalCommandLine).Line.Trim()) } else { DIFF "AdditionalCommandLine missing" } } else { MISS "Game.ini missing" }
+
+# Registry
+Write-Host "`n--- Registry ---" -ForegroundColor Yellow
+$mp=Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" -ErrorAction SilentlyContinue
+if($mp.SystemResponsiveness -eq 0){ OK "SystemResponsiveness 0" } else { DIFF "SystemResponsiveness=$($mp.SystemResponsiveness) want 0" }
+if($mp.NetworkThrottlingIndex -eq 4294967295 -or $mp.NetworkThrottlingIndex -eq -1){ OK "NetworkThrottlingIndex ffffffff" } else { DIFF "NetworkThrottlingIndex=$($mp.NetworkThrottlingIndex) want 4294967295" }
+$dx=(Get-ItemProperty "HKCU:\Software\Microsoft\DirectX\UserGpuPreferences" -ErrorAction SilentlyContinue).DirectXUserGlobalSettings
+if($dx -like "*SwapEffectUpgradeEnable=1*"){ OK "DirectXUserGlobalSettings $dx" } else { DIFF "DirectXUserGlobalSettings $dx want VRROptimizeEnable=1;SwapEffectUpgradeEnable=1;" }
+$pr=(Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Control\PriorityControl" -ErrorAction SilentlyContinue).Win32PrioritySeparation
+if($pr -eq 36){ OK "Win32PrioritySeparation 36 (FrameSync)" } elseif($pr -eq 38){ Write-Host "  [OK] Win32PrioritySeparation 38 (outside-box, sub-perceptual)" -ForegroundColor Green } else { DIFF "Win32PrioritySeparation $pr" }
+$gd=Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" -ErrorAction SilentlyContinue
+if($gd.TdrLevel -eq 3){ OK "TdrLevel 3 (safe, 8s grace)" } elseif($gd.TdrLevel -eq 0){ Write-Host "  [DIFF] TdrLevel 0 DANGEROUS — run apply.ps1 -Tier Safe to fix to 3" -ForegroundColor Yellow } else { DIFF "TdrLevel $($gd.TdrLevel)" }
+if($gd.TdrDelay -eq 8){ OK "TdrDelay 8" } else { DIFF "TdrDelay $($gd.TdrDelay) want 8" }
+if($gd.ShaderCacheSize -eq 10){ Write-Host "  [..] ShaderCacheSize 10 (legacy, NV .nip is truth)" -ForegroundColor DarkGray }
+
+# bcdedit
+Write-Host "`n--- bcdedit ---" -ForegroundColor Yellow
+$b=bcdedit /enum | Out-String
+if($b -match "disabledynamictick\s+Yes"){ DIFF "disabledynamictick Yes present — harmful on Win11, apply will delete" } else { OK "disabledynamictick absent (correct)" }
+if($b -match "tscsyncpolicy"){ OK ((bcdedit | Select-String tscsync).ToString().Trim()) }
+
+# HPET
+Write-Host "`n--- HPET ---" -ForegroundColor Yellow
+$h=Get-PnpDevice -FriendlyName "*High Precision*" -ErrorAction SilentlyContinue
+if($h.Status -eq "Error"){ OK "HPET Error (outside-box disabled) — leave Error, but v2 keeps stock; re-enable via Enable-PnpDevice if you want stock" } else { Write-Host "  [OK] HPET $($h.Status) (stock)" -ForegroundColor Green }
+
+# Power
+Write-Host "`n--- Power ---" -ForegroundColor Yellow
+$plan=powercfg /getactivescheme
+Write-Host "  $plan"
+if($plan -match "8c5e7fda"){ OK "High performance 8c5e7fda (this laptop's best per thermals)" } elseif($plan -match "5a756bc4"){ OK "Ultimate Performance (desktop best, may cage this laptop to 23W)" } else { DIFF "Power not High/Ultimate" }
+$pb=powercfg /query 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c 54533251-82be-4824-96c1-47b60b740d00 be337238-0d82-4146-a960-4f3749d470c7 | Select-String "Current AC"
+if($pb -match "0x00000002"){ OK "PERFBOOSTMODE 2 Aggressive" } else { DIFF "PERFBOOSTMODE $pb want 0x2" }
+
+# Adapters
+Write-Host "`n--- Adapters ---" -ForegroundColor Yellow
+$eth=Get-NetAdapter -Name "Ethernet" -ErrorAction SilentlyContinue
+if($eth){
+  $props=Get-NetAdapterAdvancedProperty -Name "Ethernet" -ErrorAction SilentlyContinue
+  foreach($n in @("Flow Control","Interrupt Moderation","Energy Efficient Ethernet")){
+    $p=$props | Where DisplayName -eq $n | Select -First 1
+    if($p){ if(($p.DisplayValue -eq "Disabled" -or $p.DisplayValue -eq "Off")){ OK "$n $($p.DisplayValue)" } else { DIFF "$n $($p.DisplayValue) want Disabled/Off" } } else { MISS $n }
+  }
+  $pm=Get-CimInstance -ClassName MSPower_DeviceEnable -Namespace root\wmi | Where InstanceName -like "*$($eth.PNPDeviceID)*" | Select -First 1
+  if($pm.Enable -eq $false){ OK "AllowComputerToTurnOffDevice Disabled (WMI)" } else { DIFF "AllowComputerToTurnOffDevice Enable=$($pm.Enable) want False" }
+}
+
+# QoS
+Write-Host "`n--- QoS ---" -ForegroundColor Yellow
+$qA=Get-NetQosPolicy -Name "FortniteUDP-EF" -PolicyStore ActiveStore -ErrorAction SilentlyContinue
+$qL=Get-NetQosPolicy -Name "FortniteUDP-EF" -PolicyStore localhost -ErrorAction SilentlyContinue
+$qP=Test-Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\QoS\FortniteUDP-EF"
+if($qA){ OK "ActiveStore FortniteUDP-EF DSCP $($qA.DSCPAction)" } else { DIFF "ActiveStore FortniteUDP-EF missing (volatile, expected after reboot)" }
+if($qP){ OK "Policies QoS FortniteUDP-EF present (persistent)" } else { DIFF "Policies QoS missing — apply will create" }
+
+# Tasks
+Write-Host "`n--- Tasks ---" -ForegroundColor Yellow
+@("FortniteAffinityWatcher","FortniteOutsideBox-Persist","FortniteRigV2-Persist","LatencyLab-Boot","ISLC-Gaming","FortniteGPU-MaxClock") | ForEach-Object {
+  $t=Get-ScheduledTask -TaskName $_ -ErrorAction SilentlyContinue
+  if($t){ OK "$_ $($t.State)" } else { Write-Host "  [..] $_ absent" -ForegroundColor DarkGray }
+}
+
+# Measurements hint
+Write-Host "`n--- Measurements ---" -ForegroundColor Yellow
+$ms=Get-ChildItem "$root\measurements" -ErrorAction SilentlyContinue | Select -First 5
+if($ms){ $ms | ForEach-Object { Write-Host "  $($_.Name)" } } else { Write-Host "  [..] no measurements yet — run bench.ps1" -ForegroundColor DarkGray }
+
+Write-Host "`n=== Verify done — run apply.ps1 -Tier Safe to fix DIFFs ===" -ForegroundColor Cyan

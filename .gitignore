@@ -1,0 +1,4 @@
+backups/
+measurements/*.log
+*.bak
+.DS_Store
